@@ -579,6 +579,8 @@ class EvMenu(object):
         Args:
             nodetext (str): The node text
             optionlist (list): List of (key, desc) pairs.
+            optionformat (dict, optional): Instructions to control the
+                layout of the optionlist
 
         Returns:
             string (str): The options section, including
@@ -590,12 +592,16 @@ class EvMenu(object):
             growing to make use of the screen space.
 
         """
-
+        
         # handle the node text
         nodetext = self.nodetext_formatter(nodetext)
 
         # handle the options
-        optionstext = self.options_formatter(optionlist)
+        if type(nodetext) == dict and 'optionformat' in nodetext:
+            optionstext = self.options_formatter(optionlist,
+                                                 nodetext['optionformat'])
+        else:
+            optionstext = self.options_formatter(optionlist)
 
         # format the entire node
         return self.node_formatter(nodetext, optionstext)
@@ -820,12 +826,15 @@ class EvMenu(object):
 
         # validation of the node return values
         helptext = ""
-        if is_iter(nodetext):
+        if type(nodetext) == dict:
+            if 'help' in nodetext:
+                helptext = nodetext['help']
+        elif is_iter(nodetext):
             if len(nodetext) > 1:
                 nodetext, helptext = nodetext[:2]
             else:
                 nodetext = nodetext[0]
-        nodetext = "" if nodetext is None else str(nodetext)
+        nodetext = "" if nodetext is None else nodetext
         options = [options] if isinstance(options, dict) else options
 
         # this will be displayed in the given order
@@ -1005,7 +1014,10 @@ class EvMenu(object):
             self.caller.msg(_HELP_NO_OPTION_MATCH, session=self._session)
 
     def display_nodetext(self):
-        self.caller.msg(self.nodetext, session=self._session)
+        if not (type(self.test_nodetext) == dict
+                and 'format' in self.test_nodetext
+                and self.test_nodetext['format'] == 'suppress'):
+            self.caller.msg(self.nodetext, session=self._session)
 
     def display_helptext(self):
         self.caller.msg(self.helptext, session=self._session)
@@ -1017,13 +1029,18 @@ class EvMenu(object):
         Format the node text itself.
 
         Args:
-            nodetext (str): The full node text (the text describing the node).
+            nodetext (str or dict): The full node text (the text describing the node).
 
         Returns:
-            nodetext (str): The formatted node text.
+            nodetext (str or dict): The formatted node text.
 
         """
-        return dedent(nodetext.strip("\n"), baseline_index=0).rstrip()
+        if type(nodetext) == str:
+            nodetext = nodetext.strip("\n").rstrip()
+        elif type(nodetext) == dict:
+            if 'text' in nodetext:
+                nodetext['text'] = nodetext['text'].strip("\n").rstrip()
+        return nodetext
 
     def helptext_formatter(self, helptext):
         """
@@ -1038,7 +1055,7 @@ class EvMenu(object):
         """
         return dedent(helptext.strip("\n"), baseline_index=0).rstrip()
 
-    def options_formatter(self, optionlist):
+    def options_formatter(self, optionlist, optionformat=None):
         """
         Formats the option block.
 
@@ -1046,23 +1063,45 @@ class EvMenu(object):
             optionlist (list): List of (key, description) tuples for every
                 option related to this node.
             caller (Object, Account or None, optional): The caller of the node.
+            optionformat (Dict, optional): Instructions to control the layout
+                of the options
 
         Returns:
             options (str): The formatted option display.
 
         """
+        if not optionformat:
+            optionformat = {}
         if not optionlist:
             return ""
 
         # column separation distance
         colsep = 4
 
-        nlist = len(optionlist)
+        # parse out options for Quit, Back, Proceed, None, and Finish
+        optiontable = []
+        optionbreak = []
+        for item in optionlist:
+            if ('movekeys' in optionformat and
+                    item[0] in optionformat['movekeys']):
+                optionbreak.append(item)
+            elif ('hidekeys' in optionformat and
+                  item[0] in optionformat['hidekeys']):
+                pass
+            elif ('movedesc' in optionformat and
+                    item[0] in optionformat['movedesc']):
+                optionbreak.append(item)
+            elif ('hidedesc' in optionformat and
+                  item[0] in optionformat['hidedesc']):
+                pass
+            else:
+                optiontable.append(item)
+        nlist = len(optiontable)
 
         # get the widest option line in the table.
         table_width_max = -1
         table = []
-        for key, desc in optionlist:
+        for key, desc in optiontable:
             if key or desc:
                 desc_string = ": %s" % desc if desc else ""
                 table_width_max = max(
@@ -1085,8 +1124,11 @@ class EvMenu(object):
             return ""
 
         ncols = ncols + 1 if ncols == 0 else ncols
-        # get the amount of rows needed (start with 4 rows)
-        nrows = 4
+        # get the amount of rows needed (start with 4 rows if optionformat does not override)
+        if 'rows' in optionformat:
+            nrows = optionformat['rows']
+        else:
+            nrows = 4
         while nrows * ncols < nlist:
             nrows += 1
         ncols = nlist // nrows  # number of full columns
@@ -1109,14 +1151,39 @@ class EvMenu(object):
             table[icol] = [pad(part, width=col_width + colsep, align="l") for part in table[icol]]
 
         # format the table into columns
-        return str(EvTable(table=table, border="none"))
+        result = EvTable(table=table, border="none")
+
+        # if there is a broken off section add it as rows
+        if len(optionbreak) > 0:
+            result.add_row(' ')
+            for key, desc in optionbreak:
+                if key or desc:
+                    desc_string = ": %s" % desc if desc else ""
+                    table_width_max = max(
+                        table_width_max,
+                        max(m_len(p) for p in key.split("\n"))
+                        + max(m_len(p) for p in desc_string.split("\n"))
+                        + colsep,
+                    )
+                    raw_key = strip_ansi(key)
+                    if raw_key != key:
+                        # already decorations in key definition
+                        result.add_row(" |lc%s|lt%s|le%s" % (raw_key, key,
+                                                             desc_string))
+                    else:
+                        # add a default white color to key
+                        result.add_row(" |lc%s|lt|w%s|n|le%s" % (raw_key,
+                                                                 raw_key,
+                                                                 desc_string))
+
+        return str(result)
 
     def node_formatter(self, nodetext, optionstext):
         """
         Formats the entirety of the node.
 
         Args:
-            nodetext (str): The node text as returned by `self.nodetext_formatter`.
+            nodetext (str or dict): The node text or dict as returned by `self.nodetext_formatter`.
             optionstext (str): The options display as returned by `self.options_formatter`.
             caller (Object, Account or None, optional): The caller of the node.
 
@@ -1126,17 +1193,50 @@ class EvMenu(object):
         """
         sep = self.node_border_char
 
+        if type(nodetext) == dict:
+            if 'text' in nodetext:
+                text = nodetext['text']
+            else:
+                text = ''
+            if 'footer' in nodetext:
+                footer = nodetext['footer']
+            else:
+                footer = False
+        else:
+            text = str(nodetext)
+            footer = False
+        if type(nodetext) == dict and 'format' in nodetext:
+            # ToDo: Replace with different format styles
+            result = self.default_format(sep, text, optionstext, footer)
+        else:
+            result = self.default_format(sep, text, optionstext, footer)
+
+        return result
+
+    def default_format(self, sep, text, optionstext, footer):
+        """
+        Original EvMenu formatting style.
+
+        sep (str): Seperator character
+        text (str): The node text as originally returned by `self.nodetext_formatter`.
+        optionstext (str): The options display as originally returned by `self.options_formatter`.
+        footer (str): An optional footer applied after the options
+
+        """
         if self._session:
             screen_width = self._session.protocol_flags.get("SCREENWIDTH", {0: _MAX_TEXT_WIDTH})[0]
         else:
             screen_width = _MAX_TEXT_WIDTH
 
-        nodetext_width_max = max(m_len(line) for line in nodetext.split("\n"))
+        nodetext_width_max = max(m_len(line) for line in text.split("\n"))
         options_width_max = max(m_len(line) for line in optionstext.split("\n"))
         total_width = min(screen_width, max(options_width_max, nodetext_width_max))
         separator1 = sep * total_width + "\n\n" if nodetext_width_max else ""
         separator2 = "\n" + sep * total_width + "\n\n" if total_width else ""
-        return separator1 + "|n" + nodetext + "|n" + separator2 + "|n" + optionstext
+        result = separator1 + "|n" + text + "|n" + separator2 + "|n" + optionstext
+        if footer:
+            result = result + '|/' + footer
+        return result
 
 
 # -----------------------------------------------------------
