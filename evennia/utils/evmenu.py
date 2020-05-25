@@ -858,7 +858,6 @@ class EvMenu(object):
             )
 
         # validation of the node return values
-        helptext = ""
         if type(nodetext) == dict:
             if 'help' in nodetext:
                 helptext = nodetext['help']
@@ -904,7 +903,7 @@ class EvMenu(object):
         self.nodename = nodename
 
         # handle the helptext
-        if helptext:
+        if type(helptext) == str:
             self.helptext = self.helptext_formatter(helptext)
         elif options:
             self.helptext = _HELP_FULL if self.auto_quit else _HELP_NO_QUIT
@@ -1301,7 +1300,7 @@ class EvMenu(object):
         else:
             screen_width = _MAX_TEXT_WIDTH
         nodetext_width_max = max(m_len(line) for line in atext.split("\n")) + (margins + padding + 1) * 2
-        options_width_max = max(m_len(line) for line in options.split("\n")) + (margins + padding + 1) * 2
+        options_width_max = max(m_len(strip_ansi(line)) for line in options.split("\n")) + (margins + padding + 1) * 2
         total_width = min(screen_width, max(options_width_max, nodetext_width_max))
         cpad = 0
         if total_width < screen_width:
